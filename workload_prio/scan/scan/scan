@@ -1,0 +1,2 @@
+#!/bin/bash 
+RUST_LOG=info cargo run --release 172.31.49.235 datacenter1 $1 $1 512
