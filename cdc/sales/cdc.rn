@@ -1,0 +1,92 @@
+use std::future;
+
+use latte::*;
+
+const ROW_COUNT = latte::param!("row_count", 10_000_000);
+const REPLICATION_FACTOR = latte::param!("replication_factor", 1);
+
+const KEYSPACE = "retail";
+const TABLES = #{
+    "SALES": "sales",
+};
+const P_STMT = #{
+    "SALES": #{
+        "INSERT": "p_stmt_insert",
+        "SELECT": "p_stmt_select",
+        "DELETE": "p_stmt_delete",
+    },
+};
+
+///////////////////////
+// SPECIAL FUNCTIONS //
+///////////////////////
+
+pub async fn schema(db) {
+    db.execute(`CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE} WITH REPLICATION = {
+        'class': 'NetworkTopologyStrategy', 'datacenter1': ${REPLICATION_FACTOR} }`).await?;
+    db.execute(`CREATE TABLE IF NOT EXISTS ${KEYSPACE}.${TABLES.SALES} (
+        id uuid, amount float, customer_id uuid, product_name text, purchase_time timestamp, PRIMARY KEY (id)) WITH
+        cdc = {'enabled': 'true'}
+    `).await?;
+}
+
+pub async fn erase(db) {
+    let errors = []; let futures = [];
+    for table_name in TABLES.values() {
+        futures.push(db.execute(`TRUNCATE TABLE ${KEYSPACE}.${table_name}`));
+    }
+    for result in future::join(futures).await { match result { Err(e) => errors.push(e) } }
+    if errors.len() < 1 { return Ok(()) }
+    Err(`Failed to execute 'erase' queries: ${errors.0}`)
+}
+
+pub async fn prepare(db) {
+    db.prepare(P_STMT.SALES.INSERT,
+        `INSERT INTO ${KEYSPACE}.${TABLES.SALES} (id, amount, customer_id, product_name, purchase_time)` +
+        " VALUES (:id, :amount, :customer_id, :product_name, :purchase_time)").await?;
+    db.prepare(P_STMT.SALES.SELECT,
+        `SELECT * FROM ${KEYSPACE}.${TABLES.SALES}` +
+        " WHERE id = :id").await?;
+    db.prepare(P_STMT.SALES.DELETE,
+        `DELETE FROM ${KEYSPACE}.${TABLES.SALES}` + " WHERE id = :id").await?;
+
+    db.data.WINES = fs::read_lines("/home/ubuntu/latte/workloads/sales/wines")?;
+    // db.data.PRICES = fs::read_lines("/home/ubuntu/latte/workloads/sales/prices")?;
+
+    db.load_cycle_count = ROW_COUNT;
+}
+
+pub async fn load(db, i) {
+    let errors = []; let futures = [];
+    futures.push(sales_insert(db, i));
+    for result in future::join(futures).await { match result { Err(e) => errors.push(e) } }
+    if errors.len() < 1 { return Ok(()) }
+    Err(`Failed to execute 'load' queries: ${errors.0}`)
+}
+
+//////////////////////////////////
+// SPECIFIC PER-TABLE FUNCTIONS //
+//////////////////////////////////
+
+pub async fn sales_insert(db, i) {
+    let idx = i % ROW_COUNT;
+    // NOTE: '10' in the 'blob(idx, 10)' is number of bytes
+    let id = uuid(idx);
+    let customer_id = uuid(idx % 1_000_000);
+    let product_name = db.data.WINES[i % (8665 - 1)];
+    let amount = latte::uniform(i, 100.0, 10000.0);
+    let purchase_time = now_timestamp() * 1_000 + i;
+    db.execute_prepared(P_STMT.SALES.INSERT, [id, amount, customer_id, product_name, purchase_time]).await?
+}
+
+pub async fn sales_select(db, i) {
+    let idx = i % ROW_COUNT;
+    let key = uuid(idx);
+    db.execute_prepared(P_STMT.SALES.SELECT, [key]).await?
+}
+
+pub async fn sales_delete(db, i) {
+    let idx = i % ROW_COUNT;
+    let id = uuid(idx);
+    db.execute_prepared(P_STMT.SALES.DELETE, [id]).await?
+}

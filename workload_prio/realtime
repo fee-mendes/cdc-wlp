@@ -1,0 +1,1 @@
+/home/ubuntu/co_latte/latte/target/release/latte run --consistency LOCAL_ONE --rate-sine-amplitude 0.25 --rate-sine-period 5m --start-cycle 0 --end-cycle 100000 --duration 8h --user scylladb --password scylladb --rate 350000 -t 32 -f standard1_select:4,standard1_insert:1 wlp.rn 172.31.49.235 --quiet
